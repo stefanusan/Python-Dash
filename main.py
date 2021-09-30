@@ -26,6 +26,22 @@ connect = create_engine(f'mysql+pymysql://{user}:{password}@{host}:{port}/{datab
 app = dash.Dash(external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True)
 YT_LOGO = "https://assets.stickpng.com/images/580b57fcd9996e24bc43c545.png"
 
+#query
+df_info = pd.read_sql("""SELECT * FROM us_500""", connect)
+
+df_org_line = pd.read_sql("""SELECT COUNT(DISTINCT first_name) AS 'Jumlah', state AS 'State' FROM us_500 
+                GROUP BY state ORDER BY state ASC""", connect)
+fig_org_line = px.line(
+    df_org_line,
+    x=df_org_line["State"],
+    y=df_org_line["Jumlah"]
+)
+fig_org_bar = px.bar(
+    df_org_line,
+    x=df_org_line["State"],
+    y=df_org_line["Jumlah"]
+)
+
 # the style arguments for the sidebar. We use position:fixed and a fixed width
 SIDEBAR_STYLE = {
     "position": "fixed",
@@ -108,6 +124,133 @@ app.layout = html.Div(
         content
     ],
 )
+
+
+@app.callback(
+    Output("page-content", "children"),
+    [Input("url", "pathname")],
+)
+def render_page_content(pathname): \
+
+    if pathname == "/":
+        return \
+            html.Div([
+                html.H3("Visualisasi Data", className="display-6",
+                        style={'textAlign': 'center', 'margin': '0px 0px 0px 0px'}),
+
+                dbc.Card(className='card text-white bg-secondary mb-3', children=[
+                    html.H4('Jumlah Orang',
+                            style={'margin': '10px 10px 0px 20px', 'color': 'white', },
+                            className='card-title'),
+
+                    dbc.Row([
+                        dbc.Col([
+                            dbc.CardBody([
+                                html.H6('"Grafik Bar"', className="card-title",
+                                        style={'textAlign': 'center'}),
+                                dcc.Graph(
+                                    # id='graph-org-line',
+                                    figure=fig_org_bar
+                                ),
+                            ])
+                        ]),
+                        dbc.Col([
+                            dbc.CardBody([
+                                html.H6('"Grafik Line"',
+                                        className="card-title",
+                                        style={'textAlign': 'center'}),
+                                dcc.Graph(
+                                    # id='graph-mhs-aktif-angkatan',
+                                    figure=fig_org_line,
+                                )
+                            ])
+                        ]),
+                    ]),
+
+                ]),
+
+            ], style={'margin': '0px 0px 0px 0px'})
+
+    elif pathname == "/detailinfo":
+        return \
+            html.Div([
+                html.H3("Visualisasi Datatable", className="display-6",
+                        style={'textAlign': 'center', 'margin': '0px 0px 0px 0px'}),
+
+                dash_table.DataTable(
+                    id='table-filtering-be',
+                    columns=[
+                        {"name": i, "id": i} for i in (df_info.columns)
+                    ],
+
+                    filter_action='custom',
+                    filter_query=''
+                ),
+
+            ], style={'margin': '0px 0px 0px 0px'})
+
+    # If the user tries to reach a different page, return a 404 message
+    return dbc.Jumbotron(
+        [
+            html.H1("404: Not found", className="text-danger"),
+            html.Hr(),
+            html.P(f"The pathname {pathname} was not recognised..."),
+        ], style={'margin': '100px 0px 0px 0px'}
+    )
+
+#=====datatable=====
+operators = [['ge ', '>='],
+             ['le ', '<='],
+             ['lt ', '<'],
+             ['gt ', '>'],
+             ['ne ', '!='],
+             ['eq ', '='],
+             ['contains '],
+             ['datestartswith ']]
+
+def split_filter_part(filter_part):
+    for operator_type in operators:
+        for operator in operator_type:
+            if operator in filter_part:
+                name_part, value_part = filter_part.split(operator, 1)
+                name = name_part[name_part.find('{') + 1: name_part.rfind('}')]
+
+                value_part = value_part.strip()
+                v0 = value_part[0]
+                if (v0 == value_part[-1] and v0 in ("'", '"', '`')):
+                    value = value_part[1: -1].replace('\\' + v0, v0)
+                else:
+                    try:
+                        value = float(value_part)
+                    except ValueError:
+                        value = value_part
+
+                # word operators need spaces after them in the filter string,
+                # but we don't want these later
+                return name, operator_type[0].strip(), value
+
+    return [None] * 3
+
+@app.callback(
+    Output('table-filtering-be', "data"),
+    Input('table-filtering-be', "filter_query"))
+def update_table(filter):
+    filtering_expressions = filter.split(' && ')
+    df_table_dosenf = df_info
+    for filter_part in filtering_expressions:
+        col_name, operator, filter_value = split_filter_part(filter_part)
+
+        if operator in ('eq', 'ne', 'lt', 'le', 'gt', 'ge'):
+            # these operators match pandas series operator method names
+            df_table_dosenf = df_table_dosenf.loc[getattr(df_table_dosenf[col_name], operator)(filter_value)]
+        elif operator == 'contains':
+            df_table_dosenf = df_table_dosenf.loc[df_table_dosenf[col_name].str.contains(filter_value)]
+        elif operator == 'datestartswith':
+            # this is a simplification of the front-end filtering logic,
+            # only works with complete fields in standard format
+            df_table_dosenf = df_table_dosenf.loc[df_table_dosenf[col_name].str.startswith(filter_value)]
+
+    return df_table_dosenf.to_dict('records')
 
 if __name__ == "__main__":
     app.run_server(debug=True)
